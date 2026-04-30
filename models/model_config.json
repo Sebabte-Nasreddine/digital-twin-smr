@@ -1,0 +1,109 @@
+{
+  "version": "1.0",
+  "model_type": "RandomForestRegressor (cascade)",
+  "data_source": "Base_2A.xlsx",
+  "n_training_samples": 605,
+  "inputs": {
+    "X1": {
+      "label": "Temperature",
+      "unit": "\u00b0C",
+      "min": 500.0,
+      "max": 800.0,
+      "description": "Reactor temperature"
+    },
+    "X2": {
+      "label": "Contact Time W/F\u00b0CH4",
+      "unit": "g_cat\u00b7h/mol",
+      "min": 5.566775551114164,
+      "max": 77.0832005604025,
+      "description": "Space time (weight/molar flow rate of CH4)"
+    }
+  },
+  "outputs": {
+    "Y1": {
+      "label": "CH4 Conversion",
+      "unit": "%",
+      "min": 14.23402605694831,
+      "max": 100.0,
+      "description": "Methane conversion percentage",
+      "features": [
+        "X1",
+        "X2"
+      ]
+    },
+    "Y2": {
+      "label": "H2 Yield",
+      "unit": "%",
+      "min": 0.0453843063872711,
+      "max": 35.3566220134268,
+      "description": "Hydrogen yield percentage",
+      "features": [
+        "X1",
+        "X2",
+        "Y1"
+      ]
+    },
+    "Y3": {
+      "label": "CO2 Selectivity",
+      "unit": "%",
+      "min": 0.25544122469128666,
+      "max": 15.890421149536445,
+      "description": "CO2 selectivity percentage",
+      "features": [
+        "X1",
+        "X2",
+        "Y2"
+      ]
+    },
+    "Y4": {
+      "label": "Carbon Deposition",
+      "unit": "%",
+      "min": -0.16253282905163147,
+      "max": 99.88156304113438,
+      "description": "Carbon deposition risk \u2014 minimize for stable operation",
+      "features": [
+        "X1",
+        "X2",
+        "Y2"
+      ],
+      "color_thresholds": {
+        "green": 10.0,
+        "orange": 50.0,
+        "red": 100.0
+      }
+    }
+  },
+  "cascade_order": [
+    "Y1",
+    "Y2",
+    "Y3",
+    "Y4"
+  ],
+  "scaler": "StandardScaler on [X1, X2]",
+  "feature_importance_Y1": {
+    "X1": 0.8660381820082766,
+    "X2": 0.13396181799172324
+  },
+  "metrics": {
+    "Y1": {
+      "R2": 0.9550794290666849,
+      "MSE": 38.094069070221714,
+      "MAE": 2.8792117139707956
+    },
+    "Y2": {
+      "R2": 0.9606851904287221,
+      "MSE": 4.105032084445625,
+      "MAE": 0.9503729994329772
+    },
+    "Y3": {
+      "R2": 0.942187263778586,
+      "MSE": 1.036322301209002,
+      "MAE": 0.4080261634825241
+    },
+    "Y4": {
+      "R2": 0.9750671679778906,
+      "MSE": 17.034738738927928,
+      "MAE": 1.6145169989445842
+    }
+  }
+}

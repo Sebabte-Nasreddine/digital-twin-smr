@@ -1,0 +1,27 @@
+# SMR Digital Twin — Python 3.10+
+# Install: pip install -r requirements.txt
+
+# Core ML / data
+scikit-learn>=1.4.0
+joblib>=1.3.0
+numpy>=1.26.0
+pandas>=2.1.0
+scipy>=1.12.0
+
+# Dashboard
+streamlit>=1.32.0
+plotly>=5.20.0
+
+# REST API
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+pydantic>=2.6.0
+
+# Notebook parsing (for extract_models.py inspection utilities)
+nbformat>=5.9.0
+
+# Optional: read Excel data file if present
+openpyxl>=3.1.0
+
+# Optional: advanced multi-objective optimisation
+# pymoo>=0.6.0
