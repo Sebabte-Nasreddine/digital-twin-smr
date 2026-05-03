@@ -1,8 +1,8 @@
 """
 optimize.py — Optimisation pour le jumeau numérique SMR.
 
-Stratégie : grille dense (80×80) + affinement local scipy.
-Beaucoup plus rapide que differential_evolution pour seulement 2 variables.
+Stratégie : grille vectorisée (predict_grid) + affinement local scipy.
+La grille est évaluée en un seul appel batch, donc très rapide.
 """
 
 from __future__ import annotations
@@ -29,42 +29,6 @@ def _get_bounds():
     )
 
 
-# ── Recherche sur grille + affinement local ───────────────────────────────────
-
-def _grid_then_polish(score_fn, bounds, n_grid=80, n_best=5, seed=42):
-    """
-    Évalue score_fn sur une grille n_grid×n_grid, puis affine les n_best
-    meilleurs points avec L-BFGS-B. Retourne (x_opt, score_opt).
-    """
-    x1_lo, x1_hi = bounds[0]
-    x2_lo, x2_hi = bounds[1]
-
-    X1v = np.linspace(x1_lo, x1_hi, n_grid)
-    X2v = np.linspace(x2_lo, x2_hi, n_grid)
-    X1g, X2g = np.meshgrid(X1v, X2v)
-    grid_pts = np.column_stack([X1g.ravel(), X2g.ravel()])
-
-    scores = np.array([score_fn(p) for p in grid_pts])
-
-    # Meilleurs points sur la grille → affinement local
-    top_idx = np.argsort(scores)[:n_best]
-    best_x, best_score = None, np.inf
-
-    for idx in top_idx:
-        res = minimize(
-            score_fn,
-            x0=grid_pts[idx],
-            method="L-BFGS-B",
-            bounds=bounds,
-            options={"maxiter": 200, "ftol": 1e-9},
-        )
-        if res.fun < best_score:
-            best_score = res.fun
-            best_x = res.x
-
-    return best_x, best_score
-
-
 # ── Optimisation mono-objectif ────────────────────────────────────────────────
 
 def run_single_objective(weights: dict | None = None, seed: int = 42) -> dict:
@@ -81,21 +45,40 @@ def run_single_objective(weights: dict | None = None, seed: int = 42) -> dict:
 
     y_ranges = {k: (v["min"], v["max"]) for k, v in cfg["outputs"].items()}
 
+    # Évaluation vectorisée de toute la grille en un seul appel
+    df = predict_grid((bounds[0][0], bounds[0][1]), (bounds[1][0], bounds[1][1]), n_points=80)
+
+    scores = np.zeros(len(df))
+    for k, w in weights.items():
+        lo, hi = y_ranges[k]
+        p_norm = (df[k].values - lo) / max(hi - lo, 1e-9)
+        scores -= w * p_norm
+
+    # Top 5 candidats → affinement local L-BFGS-B
+    top_idx = np.argsort(scores)[:5]
+    top_pts = df[["X1", "X2"]].values[top_idx]
+
     def _f(x):
         try:
             p = predict(float(x[0]), float(x[1]))
         except Exception:
             return 1e6
-        score = 0.0
+        s = 0.0
         for k, w in weights.items():
             lo, hi = y_ranges[k]
             p_norm = (p[k] - lo) / max(hi - lo, 1e-9)
-            score -= w * p_norm
-        return score
+            s -= w * p_norm
+        return s
 
-    best_x, best_score = _grid_then_polish(_f, bounds)
+    best_x, best_score = None, np.inf
+    for pt in top_pts:
+        res = minimize(_f, x0=pt, method="L-BFGS-B", bounds=bounds,
+                       options={"maxiter": 200, "ftol": 1e-9})
+        if res.fun < best_score:
+            best_score = res.fun
+            best_x = res.x
+
     preds = predict(float(best_x[0]), float(best_x[1]))
-
     return {
         "X1": round(float(best_x[0]), 2),
         "X2": round(float(best_x[1]), 4),
@@ -115,39 +98,53 @@ def find_optimal(
     """
     Cherche les conditions qui respectent les contraintes et maximisent
     la conversion + rendement - pénalité carbone.
+
+    Retourne :
+      - un dict avec les résultats si une solution est trouvée
+      - un dict {"infeasible": True, ...} avec les infos de diagnostic sinon
     """
     predict, predict_grid, get_config = _import_predict()
-    cfg = get_config()
     bounds = _get_bounds()
 
-    # Grille dense
-    x1_lo, x1_hi = bounds[0]
-    x2_lo, x2_hi = bounds[1]
-    X1v = np.linspace(x1_lo, x1_hi, 80)
-    X2v = np.linspace(x2_lo, x2_hi, 80)
-    X1g, X2g = np.meshgrid(X1v, X2v)
-    pts = np.column_stack([X1g.ravel(), X2g.ravel()])
+    # Évaluation vectorisée de toute la grille en un seul appel
+    df = predict_grid((bounds[0][0], bounds[0][1]), (bounds[1][0], bounds[1][1]), n_points=80)
 
-    best_score = -np.inf
-    best = None
+    mask = (df["Y1"] >= min_Y1) & (df["Y2"] >= min_Y2) & (df["Y4"] <= max_Y4)
+    feasible = df[mask]
 
-    for pt in pts:
-        try:
-            p = predict(float(pt[0]), float(pt[1]))
-        except Exception:
-            continue
-        if p["Y1"] < min_Y1 or p["Y2"] < min_Y2 or p["Y4"] > max_Y4:
-            continue
-        score = p["Y1"] + p["Y2"] - 0.5 * p["Y4"]
-        if score > best_score:
-            best_score = score
-            best = {"x": pt.copy(), "preds": p}
+    if feasible.empty:
+        # Diagnostic : trouver le minimum Y4 atteignable avec les autres contraintes
+        partial_mask = (df["Y1"] >= min_Y1) & (df["Y2"] >= min_Y2)
+        partial = df[partial_mask]
+        if partial.empty:
+            # Même Y1 et Y2 simultanément infaisables
+            best_y1_row = df.loc[df["Y1"].idxmax()]
+            return {
+                "infeasible": True,
+                "reason": "y1_y2",
+                "max_y1": round(float(df["Y1"].max()), 2),
+                "max_y2": round(float(df["Y2"].max()), 2),
+                "best_X1": round(float(best_y1_row["X1"]), 1),
+                "best_X2": round(float(best_y1_row["X2"]), 3),
+            }
+        # Y1 et Y2 OK mais Y4 trop élevé
+        min_y4 = float(partial["Y4"].min())
+        best_row = partial.loc[partial["Y4"].idxmin()]
+        return {
+            "infeasible": True,
+            "reason": "y4",
+            "min_y4_achievable": round(min_y4, 2),
+            "best_X1": round(float(best_row["X1"]), 1),
+            "best_X2": round(float(best_row["X2"]), 3),
+            "best_Y1": round(float(best_row["Y1"]), 2),
+            "best_Y2": round(float(best_row["Y2"]), 2),
+            "best_Y4": round(float(best_row["Y4"]), 2),
+        }
 
-    if best is None:
-        return None
-
-    # Affinage local
-    x0 = best["x"]
+    scores = feasible["Y1"].values + feasible["Y2"].values - 0.5 * feasible["Y4"].values
+    best_idx = int(np.argmax(scores))
+    best_row = feasible.iloc[best_idx]
+    x0 = np.array([best_row["X1"], best_row["X2"]])
 
     def _neg_score(x):
         try:
@@ -164,10 +161,9 @@ def find_optimal(
     try:
         p_final = predict(float(res.x[0]), float(res.x[1]))
     except Exception:
-        p_final = best["preds"]
+        p_final = None
 
-    if (p_final["Y1"] >= min_Y1 and p_final["Y2"] >= min_Y2
-            and p_final["Y4"] <= max_Y4):
+    if p_final and p_final["Y1"] >= min_Y1 and p_final["Y2"] >= min_Y2 and p_final["Y4"] <= max_Y4:
         return {
             "X1": round(float(res.x[0]), 2),
             "X2": round(float(res.x[1]), 4),
@@ -175,12 +171,14 @@ def find_optimal(
             "score": round(-res.fun, 4),
         }
 
-    # Retourner le meilleur point de la grille si l'affinement sort des contraintes
     return {
-        "X1": round(float(best["x"][0]), 2),
-        "X2": round(float(best["x"][1]), 4),
-        **{k: round(v, 4) for k, v in best["preds"].items()},
-        "score": round(best_score, 4),
+        "X1": round(float(x0[0]), 2),
+        "X2": round(float(x0[1]), 4),
+        "Y1": round(float(best_row["Y1"]), 4),
+        "Y2": round(float(best_row["Y2"]), 4),
+        "Y3": round(float(best_row["Y3"]), 4),
+        "Y4": round(float(best_row["Y4"]), 4),
+        "score": round(float(scores[best_idx]), 4),
     }
 
 
