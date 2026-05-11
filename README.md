@@ -1,3 +1,5 @@
+بِسْمِ ٱللهِ ٱلرَّحْمَٰنِ ٱلرَّحِيْمِ
+
 # SMR Digital Twin
 
 Simulation-driven Digital Twin for a **Steam Methane Reforming (SMR)** reactor,
